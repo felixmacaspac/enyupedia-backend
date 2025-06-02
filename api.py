@@ -42,6 +42,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Type", "Content-Length"]
 )
 
 
@@ -52,23 +53,15 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 # Define the path to your PDF in the repository
 PDF_PATH = "nud-handbook.pdf"  # Update this with your actual PDF path
 
-# Custom Gen Z prompt template
-GEN_Z_RAG_PROMPT = ChatPromptTemplate.from_template("""
-You are a Gen Z expert who speaks in Gen Z slang and style. Your responses should include:
-- Casual language with abbreviations (fr, ngl, tbh, etc.)
-- Occasional use of emojis 😎✨
-- References to internet culture and memes
-- Shortened words (fave instead of favorite)
-- Exaggerated expressions (literally dying, so valid, etc.)
-- Use of "like" as filler
-- Phrases like "no cap", "based", "slay", "vibe check", "living for this"
-
+# Standard prompt template for RAG
+RAG_PROMPT = ChatPromptTemplate.from_template("""
+You are a helpful assistant for NU Dasmariñas students. 
 Answer the question based ONLY on the following context:
 {context}
 
 Question: {question}
 
-Answer in a Gen Z style that's informative but super casual and trendy:
+Provide a clear, concise, and informative answer:
 """)
 
 async def load_pdf_async(file_path: str) -> List[Document]:
@@ -97,7 +90,7 @@ async def generate_chunks(query: str, use_pdf: bool = False) -> AsyncIterable[st
     
     llm = ChatOpenAI(   
         api_key=OPENAI_API_KEY,
-        temperature=0.7,  # Increased temperature for more creative/casual responses
+        temperature=0.3,  # Lower temperature for more factual responses
         model_name="gpt-3.5-turbo-0125",
         streaming=True,
         verbose=True,
@@ -113,7 +106,7 @@ async def generate_chunks(query: str, use_pdf: bool = False) -> AsyncIterable[st
         except Exception as e:
             print(f"Error loading PDF: {e}")
             # Yield error message and return
-            yield f"Oof, can't load that PDF rn 😭 Error: {str(e)}"
+            yield f"Sorry, I couldn't load the PDF handbook. Error: {str(e)}"
             return
     else:
         # Use the original web loader
@@ -151,8 +144,8 @@ async def generate_chunks(query: str, use_pdf: bool = False) -> AsyncIterable[st
             search_kwargs={"k": 5}  # Retrieve more documents for better context
         )
         
-        # Use our custom Gen Z prompt instead of the default one
-        prompt = GEN_Z_RAG_PROMPT
+        # Use standard prompt
+        prompt = RAG_PROMPT
 
         def format_docs(docs):
             return "\n\n".join(doc.page_content for doc in docs)
@@ -176,7 +169,7 @@ async def generate_chunks(query: str, use_pdf: bool = False) -> AsyncIterable[st
                 yield token
         except Exception as e:
             print(f"Caught exception during streaming: {e}")
-            yield f"Yikes! Something's not working rn 💀 Error: {str(e)}"
+            yield f"Sorry, something went wrong while generating the response. Error: {str(e)}"
         finally:
             callback.done.set()
 
@@ -184,7 +177,7 @@ async def generate_chunks(query: str, use_pdf: bool = False) -> AsyncIterable[st
             
     except Exception as e:
         print(f"Error in RAG pipeline: {e}")
-        yield f"This ain't it chief 😬 Error: {str(e)}"
+        yield f"Sorry, an error occurred. Error: {str(e)}"
 
 # ####################### Models ########################################
 class Input(BaseModel):
@@ -204,8 +197,20 @@ class RequestBody(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {"Hello": "World"}
+    return {
+        "status": "API is running",
+        "endpoints": ["/chatbot"],
+        "version": "1.0.0",
+        "pdf_loaded": os.path.exists(PDF_PATH)
+    }
 
+@app.post("/chat")
+async def chat_redirect(
+    query: RequestBody = Body(...),
+):
+    """Redirect /chat to /chatbot for compatibility"""
+    print("Redirecting from /chat to /chatbot")
+    return await chat(query)
 
 @app.post("/chatbot")
 async def chat(
@@ -216,5 +221,16 @@ async def chat(
     
     use_pdf = query.input.use_pdf
     
-    gen = generate_chunks(query.input.question, use_pdf)
-    return StreamingResponse(gen, media_type="text/event-stream")
+    # Use proper headers for SSE
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+    }
+    
+    return StreamingResponse(
+        generate_chunks(query.input.question, use_pdf),
+        media_type="text/event-stream",
+        headers=headers
+    )
