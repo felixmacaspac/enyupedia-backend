@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import uuid
 
-st.title("NU Dasmariñas Chatbot")
+st.title("EnyuPedia - NU Dasmariñas Knowledge Base Chatbot")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
